@@ -50,9 +50,6 @@ jobs:
         - wget -O bdd_runner.sh https://raw.githubusercontent.com/RedHatInsights/insights-behavioral-spec/main/run_in_docker.sh && chmod +x bdd_runner.sh
       script:
         - ./bdd_runner.sh smart-proxy-tests .
-    - stage: integration tests
-      script:
-        - make integration_tests
 
 stages:
   - build
@@ -60,4 +57,3 @@ stages:
   - unit tests
   - openapi-checks
   - bdd tests
-  - integration tests

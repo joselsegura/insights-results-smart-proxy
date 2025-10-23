@@ -38,11 +38,11 @@ import (
 	// interface in debug mode
 	// disable "G108 (CWE-): Profiling endpoint is automatically exposed on /debug/pprof"
 	_ "net/http/pprof" // #nosec G108
-	"path/filepath"
 
 	"github.com/RedHatInsights/insights-content-service/groups"
 	httputils "github.com/RedHatInsights/insights-operator-utils/http"
 	"github.com/RedHatInsights/insights-operator-utils/responses"
+	utypes "github.com/RedHatInsights/insights-operator-utils/types"
 	ira_server "github.com/RedHatInsights/insights-results-aggregator/server"
 	ctypes "github.com/RedHatInsights/insights-results-types"
 	"github.com/gorilla/handlers"
@@ -50,6 +50,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/RedHatInsights/insights-results-smart-proxy/amsclient"
+	"github.com/RedHatInsights/insights-results-smart-proxy/auth"
 	"github.com/RedHatInsights/insights-results-smart-proxy/content"
 	"github.com/RedHatInsights/insights-results-smart-proxy/services"
 
@@ -73,6 +74,15 @@ const (
 	// browserUserAgent is the standard product name set by web browsers (requests made via OCM, OCP Advisor, ..)
 	browserUserAgent = "Mozilla"
 
+	// openAPIGeneratorUserAgent is the product name set by OpenAPI-generated  in iqe tests clients
+	openAPIGeneratorUserAgent = "OpenAPI-Generator"
+
+	// pythonRequestsUserAgent is the product name set by Python requests library in iqe tests
+	pythonRequestsUserAgent = "python-requests"
+
+	// nonRelevantUserAgent is a test user agent used in iqe tests to verify unknown user agent handling
+	nonRelevantUserAgent = "non-relevant-user-agent"
+
 	// JSONContentType represents the application/json content type
 	JSONContentType = "application/json; charset=utf-8"
 
@@ -89,8 +99,9 @@ const (
 	dotReport = ".report"
 
 	ackedRulesError      = "Unable to retrieve list of acked rules"
-	compositeRuleIDError = "Error generating composite rule ID for [%v] and [%v]"
+	compositeRuleIDError = "Error generating composite rule ID"
 	clusterListError     = "problem reading cluster list for org"
+	ruleContentError     = "unable to get content for rule"
 )
 
 // HTTPServer is an implementation of Server interface
@@ -104,6 +115,7 @@ type HTTPServer struct {
 	ErrorChannel      chan error
 	Serv              *http.Server
 	redis             services.RedisInterface
+	rbacClient        auth.RBACClient
 }
 
 // RequestModifier is a type of function which modifies request when proxying
@@ -127,6 +139,7 @@ func New(config Configuration,
 	groupsChannel chan []groups.Group,
 	errorFoundChannel chan bool,
 	errorChannel chan error,
+	rbacClient auth.RBACClient,
 ) *HTTPServer {
 	return &HTTPServer{
 		Config:            config,
@@ -137,6 +150,7 @@ func New(config Configuration,
 		GroupsChannel:     groupsChannel,
 		ErrorFoundChannel: errorFoundChannel,
 		ErrorChannel:      errorChannel,
+		rbacClient:        rbacClient,
 	}
 }
 
@@ -156,32 +170,11 @@ func (server *HTTPServer) Initialize() http.Handler {
 	router := mux.NewRouter().StrictSlash(true)
 	router.Use(httputils.LogRequest)
 
-	apiPrefix := server.Config.APIv1Prefix
+	// Add custom metrics middleware to capture user-agent information
+	router.Use(MetricsMiddleware)
 
-	metricsURL := apiPrefix + MetricsEndpoint
-	openAPIv1URL := apiPrefix + filepath.Base(server.Config.APIv1SpecFile)
-	openAPIv2URL := server.Config.APIv2Prefix + filepath.Base(server.Config.APIv2SpecFile)
-	infoV1URL := apiPrefix + InfoEndpoint
-	infoV2URL := server.Config.APIv2Prefix + InfoEndpoint
-	// enable authentication, but only if it is setup in configuration
-	if server.Config.Auth {
-		// we have to enable authentication for all endpoints,
-		// including endpoints for Prometheus metrics and OpenAPI
-		// specification, because there is not single prefix of other
-		// REST API calls. The special endpoints needs to be handled in
-		// middleware which is not optimal
-		noAuthURLs := []string{
-			metricsURL,
-			openAPIv1URL,
-			openAPIv2URL,
-			infoV1URL,
-			infoV2URL,
-			metricsURL + "?",   // to be able to test using Frisby
-			openAPIv1URL + "?", // to be able to test using Frisby
-			openAPIv2URL + "?", // to be able to test using Frisby
-		}
-		router.Use(func(next http.Handler) http.Handler { return server.Authentication(next, noAuthURLs) })
-	}
+	// Set up authentication and authorization middleware
+	server.setupAuthMiddleware(router)
 
 	if server.Config.EnableCORS {
 		headersOK := handlers.AllowedHeaders([]string{
@@ -297,7 +290,7 @@ func (server *HTTPServer) proxyTo(baseURL string, options *ProxyOptions) func(ht
 
 		endpointURL, err := server.composeEndpoint(baseURL, request.RequestURI)
 		if err != nil {
-			log.Error().Err(err).Msgf("Error during endpoint %s URL parsing", request.RequestURI)
+			log.Error().Err(err).Str(urlStr, request.RequestURI).Msg("Error during endpoint %s URL parsing")
 			handleServerError(writer, err)
 			return
 		}
@@ -319,7 +312,7 @@ func (server *HTTPServer) proxyTo(baseURL string, options *ProxyOptions) func(ht
 		// Maybe this code should be on responses.SendRaw or something like that
 		err = responses.Send(response.StatusCode, writer, body)
 		if err != nil {
-			log.Error().Err(err).Msgf("Error writing the response")
+			log.Error().Err(err).Msg("Error writing the response")
 			handleServerError(writer, err)
 			return
 		}
@@ -349,7 +342,7 @@ func sendRequest(
 	log.Debug().Msgf("Connecting to %s", req.URL.RequestURI())
 	response, err := client.Do(req)
 	if err != nil {
-		log.Error().Err(err).Msgf("Error during retrieve of %s", req.URL.RequestURI())
+		log.Error().Err(err).Str(urlStr, req.URL.RequestURI()).Msg("Error during retrieve from URL")
 		return nil, nil, err
 	}
 
@@ -365,7 +358,7 @@ func sendRequest(
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		log.Error().Err(err).Msgf("Error while retrieving content from request to %s", req.RequestURI)
+		log.Error().Err(err).Str(urlStr, req.RequestURI).Msg("Error while retrieving content from request")
 		return nil, nil, err
 	}
 
@@ -374,7 +367,15 @@ func sendRequest(
 
 func (server *HTTPServer) composeEndpoint(baseEndpoint, currentEndpoint string) (*url.URL, error) {
 	endpoint := strings.TrimPrefix(currentEndpoint, server.Config.APIv1Prefix)
-	return url.Parse(baseEndpoint + endpoint)
+	endpoint = strings.TrimPrefix(endpoint, server.Config.APIv2Prefix)
+	endpoint = strings.TrimPrefix(endpoint, server.Config.APIdbgPrefix)
+
+	joinedURL, err := url.JoinPath(baseEndpoint, endpoint)
+	if err != nil {
+		log.Error().Err(err).Str("api", baseEndpoint).Str("endpoint", currentEndpoint).Msg("Error while joining endpoint to given API URL")
+		return nil, err
+	}
+	return url.Parse(joinedURL)
 }
 
 func copyHeader(srcHeaders, dstHeaders http.Header) {
@@ -416,7 +417,7 @@ func (server HTTPServer) readClusterInfoForOrgID(orgID ctypes.OrgID) (
 
 	if !server.Config.UseOrgClustersFallback {
 		err := fmt.Errorf("amsclient not initialized")
-		log.Error().Err(err).Msg("")
+		log.Error().Err(err).Send()
 		return nil, err
 	}
 
@@ -452,7 +453,7 @@ func (server HTTPServer) getClusterDetailsFromAggregator(orgID ctypes.OrgID) ([]
 	// #nosec G107
 	response, err := http.Get(aggregatorURL)
 	if err != nil {
-		log.Error().Err(err).Msgf("problem getting cluster list from aggregator")
+		log.Error().Err(err).Msg("problem getting cluster list from aggregator")
 		if _, ok := err.(*url.Error); ok {
 			return nil, &AggregatorServiceUnavailableError{}
 		}
@@ -764,7 +765,7 @@ func (server HTTPServer) fetchAggregatorReport(
 
 	orgID, userID, err := server.GetCurrentOrgIDUserIDFromToken(request)
 	if err != nil {
-		log.Error().Err(err).Msgf("fetchAggregatorReport unable to get orgID or userID for cluster %v", clusterID)
+		log.Error().Err(err).Interface("clusterID", clusterID).Msg("fetchAggregatorReport unable to get orgID or userID for cluster")
 		handleServerError(writer, err)
 		return
 	}
@@ -873,7 +874,7 @@ func (server HTTPServer) buildReportEndpointResponse(
 		handleServerError(writer, err)
 		return
 	}
-	log.Info().Msgf("Cluster ID: %v; %s flag = %t", clusterID, GetDisabledParam, includeDisabled)
+	log.Debug().Msgf("Cluster ID: %v; %s flag = %t", clusterID, GetDisabledParam, includeDisabled)
 
 	orgID, err := server.GetCurrentOrgID(request)
 	if err != nil {
@@ -894,7 +895,9 @@ func (server HTTPServer) buildReportEndpointResponse(
 	visibleRules, noContentRulesCnt, disabledRulesCnt, err := filterRulesInResponse(
 		aggregatorResponse.Report, osdFlag, includeDisabled, systemWideRuleDisables,
 	)
-	log.Info().Msgf("Cluster ID: %v; visible rules %d, no content rules %d, disabled rules %d", clusterID, len(visibleRules), noContentRulesCnt, disabledRulesCnt)
+	log.Debug().Msgf("Cluster ID: %v; visible rules %d, no content rules %d, disabled rules %d",
+		clusterID, len(visibleRules), noContentRulesCnt, disabledRulesCnt,
+	)
 
 	if _, ok := err.(*content.RuleContentDirectoryTimeoutError); ok {
 		handleServerError(writer, err)
@@ -906,7 +909,7 @@ func (server HTTPServer) buildReportEndpointResponse(
 }
 
 func sendReportReponse(writer http.ResponseWriter, report interface{}) {
-	err := responses.SendOK(writer, responses.BuildOkResponseWithData("report", report))
+	err := responses.SendOK(writer, responses.BuildOkResponseWithData(reportStr, report))
 	if err != nil {
 		log.Error().Err(err).Msg(responseDataError)
 	}
@@ -945,11 +948,11 @@ func (server HTTPServer) reportEndpointV1(writer http.ResponseWriter, request *h
 	userAgentProduct := server.getKnownUserAgentProduct(request)
 
 	if userAgentProduct == insightsOperatorUserAgent {
-		// request made my insights-operator, we need to retrieve the managed status of a cluster from AMS
+		// request made by insights-operator, we need to retrieve the managed status of a cluster from AMS
 		if server.amsClient != nil {
 			clusterInfo, err := server.amsClient.GetSingleClusterInfoForOrganization(orgID, clusterID)
 			if err != nil {
-				log.Error().Err(err).Msg("unable to retrieve info from AMS API")
+				log.Warn().Err(err).Msg("unable to retrieve info from AMS API")
 				handleServerError(writer, err)
 				return
 			}
@@ -961,7 +964,7 @@ func (server HTTPServer) reportEndpointV1(writer http.ResponseWriter, request *h
 		if err != nil {
 			log.Err(err).Msgf("Cluster ID: %v; Got error while parsing `%s` value", clusterID, OSDEligibleParam)
 		}
-		log.Info().Msgf("Cluster ID: %v; %s flag = %t", clusterID, OSDEligibleParam, managedCluster)
+		log.Debug().Msgf("Cluster ID: %v; %s flag = %t", clusterID, OSDEligibleParam, managedCluster)
 	}
 
 	if report.Data, report.Meta.Count, err = server.buildReportEndpointResponse(
@@ -1024,15 +1027,21 @@ func (server HTTPServer) getKnownUserAgentProduct(request *http.Request) (userAg
 
 	switch userAgentProduct {
 	case insightsOperatorUserAgent:
-		log.Info().Msg("request made by Insights Operator to be shown in the OCP Web console")
+		log.Debug().Msg("request made by Insights Operator to be shown in the OCP Web console")
 	case acmUserAgent:
-		log.Info().Msg("request made by ACM Operator to be shown in the the Advanced Cluster Management")
+		log.Debug().Msg("request made by ACM Operator to be shown in the the Advanced Cluster Management")
 	case browserUserAgent:
-		log.Info().Msg("request made by a regular web browser")
+		log.Debug().Msg("request made by a regular web browser")
+	case openAPIGeneratorUserAgent:
+		log.Debug().Msg("request made by OpenAPI-generated test client from iqe tests")
+	case pythonRequestsUserAgent:
+		log.Debug().Msg("request made by Python requests library probably from iqe tests")
+	case nonRelevantUserAgent:
+		log.Debug().Msg("request made by non-relevant-user-agent test case from iqe tests")
 	default:
-		log.Error().Str(userAgentHeader, request.Header.Get(userAgentHeader)).Msgf(
-			"improper or unknown user agent product [%v]", userAgentProduct,
-		)
+		log.Error().Str(userAgentHeader, request.Header.Get(userAgentHeader)).
+			Str("userAgentProduct", userAgentProduct).
+			Msg("improper or unknown user agent product")
 	}
 
 	return
@@ -1067,7 +1076,8 @@ func (server HTTPServer) getRuleCount(visibleRules []types.RuleWithContentRespon
 	// This case should appear as "No issues found" in customer-facing applications, because the only
 	// thing we could show is rule module + error key, which have no informational value to customers.
 	if len(visibleRules) == 0 && noContentRulesCnt > 0 && disabledRulesCnt == 0 {
-		log.Error().Msgf("Cluster ID: %v; Rules are hitting, but we don't have content for any of them.", clusterID)
+		log.Error().Interface("clusterID", clusterID).
+			Msg("Rules are hitting, but we don't have content for any of them.")
 		totalRuleCnt = 0
 	}
 	return totalRuleCnt
@@ -1094,7 +1104,7 @@ func (server HTTPServer) reportForListOfClustersEndpoint(writer http.ResponseWri
 // reportForListOfClustersPayloadEndpoint is a handler that returns reports for
 // several clusters that all need to belong to one organization specified in
 // request path. List of clusters is specified in request body which means that
-// clients can use as many cluster ID as the wont without any (real) limits.
+// clients can use as many cluster ID as they want without any (real) limits.
 func (server HTTPServer) reportForListOfClustersPayloadEndpoint(writer http.ResponseWriter, request *http.Request) {
 	// try to read results from Insights Results Aggregator service
 	aggregatorResponse, successful := server.fetchAggregatorReportsUsingRequestBodyClusterList(writer, request)
@@ -1167,7 +1177,7 @@ func (server HTTPServer) singleRuleEndpoint(writer http.ResponseWriter, request 
 		}
 	}
 
-	err = responses.SendOK(writer, responses.BuildOkResponseWithData("report", *rule))
+	err = responses.SendOK(writer, responses.BuildOkResponseWithData(reportStr, *rule))
 	if err != nil {
 		log.Error().Err(err).Msg(responseDataError)
 	}
@@ -1211,7 +1221,7 @@ func (server *HTTPServer) checkInternalRulePermissions(request *http.Request) er
 
 	// If the loop ends without returning nil, then an authentication error should be raised
 	const message = "This organization is not allowed to access this recommendation"
-	return &AuthenticationError{ErrString: message}
+	return &auth.AuthenticationError{ErrString: message}
 }
 
 // getGroupsConfig retrieves the groups configuration from a channel to get the
@@ -1226,7 +1236,7 @@ func (server HTTPServer) getGroupsConfig() (
 	select {
 	case val, ok := <-server.ErrorFoundChannel:
 		if !ok {
-			log.Error().Msgf("errorFound channel is closed")
+			log.Error().Msg("errorFound channel is closed")
 			return
 		}
 		errorFound = val
@@ -1294,7 +1304,7 @@ func filterRulesInResponse(aggregatorReport []ctypes.RuleOnReport, filterOSD, ge
 	for i := range aggregatorReport {
 		aggregatorRule := aggregatorReport[i]
 		if !getDisabled && isDisabledRule(aggregatorRule, systemWideDisabledRules) {
-			log.Info().Msgf("disabled rule ID %v|%v", aggregatorRule.Module, aggregatorRule.ErrorKey)
+			log.Debug().Msgf("disabled rule ID %v|%v", aggregatorRule.Module, aggregatorRule.ErrorKey)
 			disabledRulesCnt++
 			continue
 		}
@@ -1303,7 +1313,7 @@ func filterRulesInResponse(aggregatorReport []ctypes.RuleOnReport, filterOSD, ge
 		if err != nil {
 			if !filtered {
 				// rule has not been filtered by OSDEligible field
-				log.Info().Msgf("no content rule ID %v|%v", aggregatorRule.Module, aggregatorRule.ErrorKey)
+				log.Debug().Msgf("no content rule ID %v|%v", aggregatorRule.Module, aggregatorRule.ErrorKey)
 				noContentRulesCnt++
 			}
 			if _, ok := err.(*content.RuleContentDirectoryTimeoutError); ok {
@@ -1317,7 +1327,7 @@ func filterRulesInResponse(aggregatorReport []ctypes.RuleOnReport, filterOSD, ge
 
 		if filtered {
 			// rule has been filtered by OSDEligible field
-			log.Info().Msgf("osd filtered rule ID %v|%v", aggregatorRule.Module, aggregatorRule.ErrorKey)
+			log.Debug().Msgf("osd filtered rule ID %v|%v", aggregatorRule.Module, aggregatorRule.ErrorKey)
 			continue
 		}
 
@@ -1392,7 +1402,7 @@ func (server *HTTPServer) readListOfDisabledRulesForClusters(
 	// #nosec G107
 	resp, err := http.Post(aggregatorURL, JSONContentType, bytes.NewBuffer(jsonMarshalled))
 	if err != nil {
-		log.Error().Err(err).Msgf("readListOfDisabledRulesForClusters problem getting response from aggregator")
+		log.Error().Err(err).Msg("readListOfDisabledRulesForClusters problem getting response from aggregator")
 		if _, ok := err.(*url.Error); ok {
 			handleServerError(writer, &AggregatorServiceUnavailableError{})
 		} else {
@@ -1443,10 +1453,7 @@ func (server *HTTPServer) getClusterListAndUserData(
 		handleServerError(writer, err)
 		return
 	}
-	log.Info().Uint32(orgIDTag, uint32(orgID)).Msgf("time since getClusterListAndUserData start, after readClusterInfoForOrgID took %s", time.Since(tStart))
-	log.Info().Uint32(orgIDTag, uint32(orgID)).Msgf(
-		"getClusterListAndUserData number of clusters before processing %d", len(clusterInfoList),
-	)
+	log.Info().Uint32(orgIDTag, uint32(orgID)).Msgf("time spent in AMS API %s", time.Since(tStart))
 
 	clusterRecommendationMap, err = server.getClustersAndRecommendations(writer, orgID, userID, types.GetClusterNames(clusterInfoList))
 	if err != nil {
@@ -1458,7 +1465,6 @@ func (server *HTTPServer) getClusterListAndUserData(
 
 		return
 	}
-	log.Info().Uint32(orgIDTag, uint32(orgID)).Msgf("time since getClusterListAndUserData start, after getClustersAndRecommendations took %s", time.Since(tStart))
 
 	// get a map of acknowledged rules
 	ackedRulesMap, err = server.getRuleAcksMap(orgID)
@@ -1466,11 +1472,118 @@ func (server *HTTPServer) getClusterListAndUserData(
 		handleServerError(writer, err)
 		return
 	}
-	log.Info().Uint32(orgIDTag, uint32(orgID)).Msgf("time since getClusterListAndUserData start, after getRuleAcksMap took %s", time.Since(tStart))
 
 	// retrieve list of cluster IDs and single disabled rules for each cluster
 	disabledRulesPerCluster = server.getUserDisabledRulesPerCluster(orgID)
-	log.Info().Uint32(orgIDTag, uint32(orgID)).Msgf("time since getClusterListAndUserData start, after getUserDisabledRulesPerCluster took %s", time.Since(tStart))
+	log.Debug().Uint32(orgIDTag, uint32(orgID)).Msgf("time since getClusterListAndUserData start %s", time.Since(tStart))
 
 	return
+}
+
+// getWorkloadsForCluster returns []types.WorkloadsForCluster{} when no workloads were found for given cluster/namespace.
+// returns nil upon receiving an unexpected error from aggregator.
+func (server *HTTPServer) getWorkloadsForCluster(
+	orgID types.OrgID,
+	clusterID types.ClusterName,
+	namespace types.Namespace,
+) (
+	workloads types.WorkloadsForCluster, err error,
+) {
+	var response struct {
+		Status    string                    `json:"status"`
+		Workloads types.WorkloadsForCluster `json:"workloads"`
+	}
+
+	aggregatorURL := httputils.MakeURLToEndpoint(
+		server.ServicesConfig.AggregatorBaseEndpoint,
+		ira_server.DVOWorkloadRecommendationsSingleNamespace,
+		orgID, namespace.UUID, clusterID,
+	)
+
+	// #nosec G107
+	resp, err := http.Get(aggregatorURL)
+	if err != nil {
+		return
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return workloads, &utypes.ItemNotFoundError{
+			ItemID: fmt.Sprintf("cluster=%s;namespace=%s", clusterID, namespace.UUID)}
+	}
+
+	// check the aggregator response
+	if resp.StatusCode != http.StatusOK {
+		err = fmt.Errorf("error reading workloads from aggregator: %v", resp.StatusCode)
+		return
+	}
+
+	defer services.CloseResponseBody(resp)
+
+	err = json.NewDecoder(resp.Body).Decode(&response)
+	if err != nil {
+		return
+	}
+
+	return response.Workloads, nil
+}
+
+// getWorkloadsForOrganization returns a list of workloads for given organization ID.
+// Empty slice is returned when aggregator responds with 404 Not Found.
+// Nil is returned when any other unexpected error occurs.
+func (server *HTTPServer) getWorkloadsForOrganization(
+	orgID types.OrgID, writer http.ResponseWriter, clusterInfo []types.ClusterInfo,
+) ([]types.WorkloadsForNamespace, error) {
+	// wont be used anywhere else
+	var response struct {
+		Status    string                        `json:"status"`
+		Workloads []types.WorkloadsForNamespace `json:"workloads"`
+	}
+
+	aggregatorURL := httputils.MakeURLToEndpoint(
+		server.ServicesConfig.AggregatorBaseEndpoint,
+		ira_server.DVOWorkloadRecommendations,
+		orgID,
+	)
+
+	// marshalling a list to JSON is much faster than marshaling a map
+	clusterPayload := make([]types.ClusterName, len(clusterInfo))
+	for i, clusterInfo := range clusterInfo {
+		clusterPayload[i] = clusterInfo.ID
+	}
+
+	body, err := json.Marshal(clusterPayload)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to marshal cluster list body")
+		return nil, err
+	}
+
+	// #nosec G107
+	resp, err := http.Post(aggregatorURL, JSONContentType, bytes.NewBuffer(body))
+	if err != nil {
+		if _, ok := err.(*url.Error); ok {
+			handleServerError(writer, &AggregatorServiceUnavailableError{})
+		} else {
+			handleServerError(writer, err)
+		}
+		return nil, nil
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return []types.WorkloadsForNamespace{}, nil
+	}
+
+	// check the aggregator response
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("error reading workloads from aggregator: %v", resp.StatusCode)
+		return nil, err
+	}
+
+	defer services.CloseResponseBody(resp)
+
+	err = json.NewDecoder(resp.Body).Decode(&response)
+	if err != nil {
+		return nil, err
+	}
+
+	return response.Workloads, nil
 }

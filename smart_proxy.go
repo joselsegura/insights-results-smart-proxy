@@ -30,11 +30,12 @@ import (
 
 	"github.com/RedHatInsights/insights-content-service/groups"
 	"github.com/RedHatInsights/insights-operator-utils/logger"
-	"github.com/RedHatInsights/insights-operator-utils/metrics"
 	"github.com/rs/zerolog/log"
 
 	"github.com/RedHatInsights/insights-results-smart-proxy/amsclient"
+	"github.com/RedHatInsights/insights-results-smart-proxy/auth"
 	"github.com/RedHatInsights/insights-results-smart-proxy/conf"
+	"github.com/RedHatInsights/insights-results-smart-proxy/metrics"
 	"github.com/RedHatInsights/insights-results-smart-proxy/server"
 	"github.com/RedHatInsights/insights-results-smart-proxy/services"
 
@@ -51,6 +52,12 @@ const (
 	// ExitStatusServerError means that the HTTP server cannot be initialized
 	ExitStatusServerError
 	defaultConfigFileName = "config"
+	//Constants for commands
+	commandStartService = "start-service"
+	commandPrintVersion = "print-version"
+	commandPrintHelp    = "print-help"
+	commandPrintConfig  = "print-config"
+	commandPrintEnv     = "print-env"
 )
 
 const helpMessageTemplate = `
@@ -113,6 +120,7 @@ func startServer() ExitCode {
 	servicesCfg := conf.GetServicesConfiguration()
 	amsConfig := conf.GetAMSClientConfiguration()
 	redisConf := conf.GetRedisConfiguration()
+	rbacCfg := conf.GetRBACConfiguration()
 	groupsChannel := make(chan []groups.Group)
 	errorFoundChannel := make(chan bool)
 	errorChannel := make(chan error)
@@ -131,18 +139,21 @@ func startServer() ExitCode {
 
 	redisClient, err := services.NewRedisClient(redisConf)
 	if err != nil {
-		redisClient = nil
-	} else {
-		// PING Redis server
-		if err = redisClient.HealthCheck(); err != nil {
-			log.Error().Err(err).Msg("failed to ping Redis server")
-			redisClient = nil
-		} else {
-			log.Info().Msg("Redis client created, Redis server is responding")
-		}
+		log.Error().Err(err).Msg("failed to initialize Redis server")
+		return ExitStatusServerError
 	}
+	if err = redisClient.HealthCheck(); err != nil {
+		log.Error().Err(err).Msg("failed to ping Redis server")
+		return ExitStatusServerError
+	}
+	log.Info().Msg("Redis client created, Redis server is responding")
 
-	serverInstance = server.New(serverCfg, servicesCfg, amsClient, redisClient, groupsChannel, errorFoundChannel, errorChannel)
+	rbac, err := auth.NewRBACClient(&rbacCfg)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to initialize RBAC client")
+		return ExitStatusServerError
+	}
+	serverInstance = server.New(serverCfg, servicesCfg, amsClient, redisClient, groupsChannel, errorFoundChannel, errorChannel, rbac)
 
 	// fill-in additional info used by /info endpoint handler
 	fillInInfoParams(serverInstance.InfoParams)
@@ -229,22 +240,22 @@ func handleGroupError(err error,
 // handleCommand select the function to be called depending on command argument
 func handleCommand(command string) ExitCode {
 	switch command {
-	case "start-service":
+	case commandStartService:
 		return startServer()
 
-	case "print-version":
+	case commandPrintVersion:
 		printVersionInfo()
 		return ExitStatusOK
 
-	case "print-help":
+	case commandPrintHelp:
 		printHelp()
 		return ExitStatusOK
 
-	case "print-config":
+	case commandPrintConfig:
 		printConfig()
 		return ExitStatusOK
 
-	case "print-env":
+	case commandPrintEnv:
 		printEnv()
 		return ExitStatusOK
 	}
@@ -264,7 +275,6 @@ func main() {
 		conf.GetLoggingConfiguration(),
 		conf.GetCloudWatchConfiguration(),
 		conf.GetSentryLoggingConfiguration(),
-		conf.GetKafkaZerologConfiguration(),
 	)
 	if err != nil {
 		panic(err)
@@ -289,7 +299,7 @@ func main() {
 
 	args := flag.Args()
 
-	command := "start-service"
+	command := commandStartService
 	if len(args) >= 1 {
 		command = strings.ToLower(strings.TrimSpace(args[0]))
 	}

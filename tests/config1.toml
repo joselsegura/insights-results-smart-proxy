@@ -31,3 +31,31 @@ groups_poll_time = "5s"
 
 [setup]
 internal_rules_organizations_csv_file = "tests/internal_organizations_test.csv"
+
+[amsclient]
+url = "https://api.openshift.com"
+client_id = "-client-id-"
+client_secret = "-top-secret-"
+page_size = 6000
+cluster_list_caching = false
+
+[metrics]
+namespace = "smart_proxy"
+
+[redis]
+database = 42
+endpoint = "localhost:6379"
+password = "-redis-password-"
+timeout_seconds = 30
+
+[sentry]
+dsn = "test_dsn"
+environment = "test_env"
+
+[logging]
+debug = true
+
+[rbac]
+url = "https://api.openshift.com"
+enabled = false
+enforce = false

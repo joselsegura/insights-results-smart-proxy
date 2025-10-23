@@ -47,8 +47,7 @@ log_auth_token = true
 production, `false` is used every time.
 * `auth` turns on or turns authentication. Please note that this option can be set to `false` only
 in devel environment. In production, `true` is used every time.
-* `auth_type` set type of auth, it means which header to use for auth `x-rh-identity` or
-`Authorization`. Can be used only with `auth = true`. Possible options: `jwt`, `xrh`
+* `auth_type` set type of auth. Can be used only with `auth = true`. Auth type used in all envs: `xrh`
 * `use_https` enable or disable the usage of SSL transport for the HTTP server
 * `enable_cors` enable or disable the [CORS
   headers](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS)
@@ -99,6 +98,7 @@ client_secret = "Corresponding client secret"
 token = "a valid token"
 url = "https://api.openshift.com"
 page_size = 100
+cluster_list_caching = "false"
 ```
 
 * `client_id` and `client_secret` are optionals, but if any of them is defined, the other one should be
@@ -107,6 +107,7 @@ page_size = 100
   order to connect to the AMS API
 * `url` indicates the base URL for the AMS API
 * `page_size` is optional and defaults to 100. Defines the size of every page of results from the API
+* `cluster_list_caching` is used to toggle cluster list caching from AMS in Redis
 
 In order to use the AMS API, the client needs some of the credentials defined above. If both
 `client_id`/`client_secret` and `token` are defined at the same time, `client_id`/`client_secret` pair

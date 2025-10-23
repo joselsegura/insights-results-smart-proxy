@@ -34,6 +34,9 @@ const (
 	// UpgradeRisksPredictionEndpoint returns the prediction about upgrading
 	// the given cluster.
 	UpgradeRisksPredictionEndpoint = "cluster/{cluster}/upgrade-risks-prediction"
+	// UpgradeRisksPredictionMultiClusterEndpoint returns the prediction about upgrading
+	// a set of clusters
+	UpgradeRisksPredictionMultiClusterEndpoint = "upgrade-risks-prediction" // #nosec G101
 
 	// ClustersDetail https://issues.redhat.com/browse/CCXDEV-5088
 	ClustersDetail = "rule/{rule_selector}/clusters_detail"
@@ -98,8 +101,30 @@ const (
 	// ID. If the ack existed, it is deleted and a 204 is returned.
 	// Otherwise, a 404 is returned.
 	AckDeleteEndpoint = "ack/{rule_id}"
+
 	// Rating endpoint will get/modify the vote for a rule id by the user
 	Rating = "rating"
+
+	// DVONamespaceForClusterEndpoint Returns the list of all namespaces (i.e. array of objects) to
+	// which this particular account has access filtered by {cluster_name}.
+	// Each object contains the namespace ID, the namespace display name if
+	// available, the cluster ID under which this namespace is created
+	// (repeated input), and the number of affecting recommendations for
+	// this namespace as well.
+	//
+	// BDD scenarios for this endpoint:
+	// https://github.com/RedHatInsights/insights-behavioral-spec/blob/main/features/DVO_Recommendations/Smart_Proxy_REST_API.feature
+	DVONamespaceForClusterEndpoint = "namespaces/dvo/{namespace}/cluster/{cluster}"
+
+	// DVONamespaceListEndpoint returns a list of all DVO namespaces to
+	// which an account has access. Each entry contains the
+	// namespace ID, the namespace display name (if available), the cluster
+	// ID under which this namespace was created, and the number of
+	// recommendations affecting this namespace.
+	//
+	// BDD scenarios for this endpoint:
+	// https://github.com/RedHatInsights/insights-behavioral-spec/blob/main/features/DVO_Recommendations/Smart_Proxy_REST_API.feature
+	DVONamespaceListEndpoint = "namespaces/dvo"
 )
 
 // addV2EndpointsToRouter adds API V2 specific endpoints to the router
@@ -109,6 +134,7 @@ func (server *HTTPServer) addV2EndpointsToRouter(router *mux.Router) {
 
 	// Common REST API endpoints
 	router.HandleFunc(apiV2Prefix+MainEndpoint, server.mainEndpoint).Methods(http.MethodGet)
+	router.HandleFunc(apiV2Prefix+RuleGroupsEndpoint, server.getGroups).Methods(http.MethodGet, http.MethodOptions)
 
 	// Reports endpoints
 	server.addV2ReportsEndpointsToRouter(router, apiV2Prefix)
@@ -122,11 +148,15 @@ func (server *HTTPServer) addV2EndpointsToRouter(router *mux.Router) {
 	// Endpoints requiring Redis to work
 	server.addV2RedisEndpointsToRouter(router, apiV2Prefix)
 
+	// Endpoints related to DVO workload recommendations
+	server.addV2DVOEndpointsToRouter(router, apiV2Prefix)
+
 	// Prometheus metrics
 	router.Handle(apiV2Prefix+MetricsEndpoint, promhttp.Handler()).Methods(http.MethodGet)
 
 	router.HandleFunc(apiV2Prefix+InfoEndpoint, server.infoMap).Methods(http.MethodGet, http.MethodOptions)
 	router.HandleFunc(apiV2Prefix+UpgradeRisksPredictionEndpoint, server.upgradeRisksPrediction).Methods(http.MethodGet)
+	router.HandleFunc(apiV2Prefix+UpgradeRisksPredictionMultiClusterEndpoint, server.upgradeRisksPredictionMultiCluster).Methods(http.MethodPost)
 
 	// OpenAPI specs
 	router.HandleFunc(
@@ -142,6 +172,12 @@ func (server *HTTPServer) addV2RedisEndpointsToRouter(router *mux.Router, apiPre
 	router.HandleFunc(apiPrefix+ListAllRequestIDs, server.getRequestsForClusterPostVariant).Methods(http.MethodPost)
 	router.HandleFunc(apiPrefix+StatusOfRequestID, server.getRequestStatusForCluster).Methods(http.MethodGet)
 	router.HandleFunc(apiPrefix+RuleHitsForRequestID, server.getReportForRequest).Methods(http.MethodGet)
+}
+
+// addV2DVOEndpointsToRouter method registers handlers for endpoints related to DVO workloads
+func (server *HTTPServer) addV2DVOEndpointsToRouter(router *mux.Router, apiPrefix string) {
+	router.HandleFunc(apiPrefix+DVONamespaceForClusterEndpoint, server.getDVONamespacesForCluster).Methods(http.MethodGet)
+	router.HandleFunc(apiPrefix+DVONamespaceListEndpoint, server.getDVONamespaceList).Methods(http.MethodGet)
 }
 
 // addV2ReportsEndpointsToRouter method registers handlers for endpoints that

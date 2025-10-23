@@ -197,21 +197,36 @@ func (server HTTPServer) getOrganizationOverview(
 			continue
 		}
 
+		// Debug: log input recommendations before filtering
+		log.Debug().
+			Interface("inputRecommendations", hittingRecommendations.Recommendations).
+			Str("clusterID", string(clusterInfo.ID)).
+			Msg("Input data before filterOutDisabledRules")
+
 		// filter out acked and disabled rules
 		enabledOnlyRecommendations := filterOutDisabledRules(
 			hittingRecommendations.Recommendations, clusterInfo.ID,
 			systemWideDisabledRules, disabledRulesPerCluster,
 		)
 
+		// Debug: log filtered recommendations after filtering
+		log.Debug().
+			Interface("enabledOnlyRecommendations", enabledOnlyRecommendations).
+			Msg("Output data after filterOutDisabledRules")
+
 		var filteredRecommendations int
 		for _, ruleID := range enabledOnlyRecommendations {
+			log.Info().Str("ruleID", string(ruleID)).Msg("Processing rule ID")
+			if string(ruleID) == "" {
+				log.Info().Msg("Found empty ruleID in enabledOnlyRecommendations")
+			}
 			ruleContent, err := content.GetContentForRecommendation(ruleID)
 			if err != nil {
 				if err, ok := err.(*content.RuleContentDirectoryTimeoutError); ok {
 					return overview, err
 				}
 				// missing rule content, simply omit the rule as we can't display anything
-				log.Error().Err(err).Msgf("unable to get content for rule with id %v", ruleID)
+				log.Error().Err(err).Interface(ruleIDStr, ruleID).Msg(ruleContentError)
 				filteredRecommendations++
 				continue
 			}
@@ -316,7 +331,7 @@ func generateOrgOverview(
 		var clusterReport types.ReportRules
 
 		if err := json.Unmarshal(singleReport, &clusterReport); err != nil {
-			log.Error().Err(err).Msgf("The report %v is not ok", singleReport)
+			log.Error().Err(err).Interface(reportStr, singleReport).Msg("The report is not ok")
 			continue
 		}
 
@@ -339,7 +354,7 @@ func generateOrgOverview(
 				if _, ok := err.(*content.RuleContentDirectoryTimeoutError); ok {
 					return sptypes.OrgOverviewResponse{}, err
 				}
-				log.Error().Err(err).Msgf("Unable to retrieve content for rule %s", ruleID)
+				log.Error().Err(err).Interface(ruleIDStr, ruleID).Msg("Unable to retrieve content for rule")
 				continue
 			}
 
@@ -453,14 +468,14 @@ func readInfoAPIEndpoint(url string) (map[string]string, error) {
 
 	// check the status code
 	if response.StatusCode != http.StatusOK {
-		err = fmt.Errorf("Improper status code %d", response.StatusCode)
+		err = fmt.Errorf("improper status code %d", response.StatusCode)
 		return nil, err
 	}
 
 	// try to read response body
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		err = errors.New("Problem reading response from /info endpoint")
+		err = errors.New("problem reading response from /info endpoint")
 		return nil, err
 	}
 
@@ -469,7 +484,7 @@ func readInfoAPIEndpoint(url string) (map[string]string, error) {
 
 	err = json.Unmarshal(body, &decoded)
 	if err != nil {
-		err = errors.New("Problem unmarshalling JSON response from /info endpoint")
+		err = errors.New("problem unmarshalling JSON response from /info endpoint")
 		return nil, err
 	}
 

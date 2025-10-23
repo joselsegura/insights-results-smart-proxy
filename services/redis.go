@@ -40,16 +40,15 @@ const (
 	// RuleHitsFieldName represent the name of hte field in Redis hash containing simplified rule hits
 	RuleHitsFieldName = "rule_hits"
 	// ScanBatchCount is the number of records to go through in a single SCAN operation
-	ScanBatchCount = 1000
+	ScanBatchCount = 100
 
 	redisCmdExecutionFailedMsg = "failed to execute command against Redis server"
 )
 
 var (
 	// RequestIDsScanPattern is a glob-style pattern to find all matching keys. Uses ?* instead of * to avoid
-	// matching "organization:%v:cluster:%v:request:". [^:reports] is an exclude pattern to not match the
-	// simplified report keys
-	RequestIDsScanPattern = "organization:%v:cluster:%v:request:?*[^:reports]"
+	// matching "organization:%v:cluster:%v:request:".
+	RequestIDsScanPattern = "organization:%v:cluster:%v:request:?*"
 
 	// SimplifiedReportKey is a key under which the information about specific requests is stored
 	SimplifiedReportKey = "organization:%v:cluster:%v:request:%v:reports"
@@ -86,6 +85,7 @@ func NewRedisClient(conf RedisConfiguration) (RedisInterface, error) {
 	client, err := redis.CreateRedisClient(
 		conf.RedisEndpoint,
 		conf.RedisDatabase,
+		conf.RedisUsername,
 		conf.RedisPassword,
 		conf.RedisTimeoutSeconds,
 	)
@@ -116,12 +116,18 @@ func (redisClient *RedisClient) GetRequestIDsForClusterID(
 		var err error
 		keys, cursor, err = redisClient.Client.Connection.Scan(ctx, cursor, scanKey, ScanBatchCount).Result()
 		if err != nil {
-			log.Error().Err(err).Msgf("failed to execute SCAN command for key '%v' and cursor '%d'", scanKey, cursor)
+			log.Error().Err(err).
+				Str("scanKey", scanKey).Uint64("cursor", cursor).
+				Msg("failed to execute SCAN command for key and cursor")
 			return nil, err
 		}
 
 		// get last part of key == request_id
 		for _, key := range keys {
+			// exclude simplified report keys that are ending with ":reports" suffix
+			if strings.HasSuffix(key, ":reports") {
+				continue
+			}
 			keySliced := strings.Split(key, ":")
 			requestID := keySliced[len(keySliced)-1]
 			requestIDs = append(requestIDs, types.RequestID(requestID))
@@ -154,7 +160,7 @@ func (redisClient *RedisClient) GetTimestampsForRequestIDs(
 	}
 
 	// queue commands in Redis pipeline. EXEC command is issued upon function exit
-	commands, err := redisClient.Client.Connection.Pipelined(ctx, func(pipe redisV9.Pipeliner) error {
+	commands, err := redisClient.Connection.Pipelined(ctx, func(pipe redisV9.Pipeliner) error {
 		for _, key := range keys {
 			pipe.HMGet(ctx, key, RequestIDFieldName, ReceivedTimestampFieldName, ProcessedTimestampFieldName)
 		}
@@ -209,7 +215,7 @@ func (redisClient *RedisClient) GetRuleHitsForRequest(
 	ctx := context.Background()
 	key := fmt.Sprintf(SimplifiedReportKey, orgID, clusterID, requestID)
 
-	cmd := redisClient.Client.Connection.HMGet(ctx, key, RequestIDFieldName, RuleHitsFieldName)
+	cmd := redisClient.Connection.HMGet(ctx, key, RequestIDFieldName, RuleHitsFieldName)
 	if err = cmd.Err(); err != nil {
 		log.Error().Err(err).Msg(redisCmdExecutionFailedMsg)
 		return
@@ -224,7 +230,7 @@ func (redisClient *RedisClient) GetRuleHitsForRequest(
 	// report not found in storage
 	if simplifiedReport.RequestID == "" {
 		err = &utypes.ItemNotFoundError{ItemID: requestID}
-		log.Error().Err(err).Msgf("request data for request_id %v not found in Redis", requestID)
+		log.Warn().Err(err).Msgf("request data for request_id %v not found in Redis", requestID)
 		return
 	}
 
@@ -236,8 +242,12 @@ func (redisClient *RedisClient) GetRuleHitsForRequest(
 		ruleIDRegex := regexp.MustCompile(`^([a-zA-Z_0-9.]+)[|]([a-zA-Z_0-9.]+)$`)
 
 		isRuleIDValid := ruleIDRegex.MatchString(ruleHit)
+		if ruleHit == "" {
+			log.Debug().Str("RequestID", simplifiedReport.RequestID).Msg("There are no rule hits for given request id")
+			continue
+		}
 		if !isRuleIDValid {
-			log.Error().Msgf("rule_id [%v] retrieved from Redis is in invalid format", ruleHit)
+			log.Error().Str("rule_id", ruleHit).Msg("rule_id retrieved from Redis is in invalid format")
 			continue
 		}
 

@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	httputils "github.com/RedHatInsights/insights-operator-utils/http"
+	"github.com/RedHatInsights/insights-operator-utils/responses"
 	ctypes "github.com/RedHatInsights/insights-results-types"
 	"github.com/rs/zerolog/log"
 
@@ -41,6 +42,8 @@ const (
 	RuleIDParamName = "rule_id"
 	// RequestIDParam parameter name in the URL for request IDs
 	RequestIDParam = "request_id"
+	// NamespaceIDParam parameter name in the URL for namespace UUIDs
+	NamespaceIDParam = "namespace"
 )
 
 func readRuleIDWithErrorKey(writer http.ResponseWriter, request *http.Request) (ctypes.RuleID, ctypes.ErrorKey, error) {
@@ -54,11 +57,14 @@ func readRuleIDWithErrorKey(writer http.ResponseWriter, request *http.Request) (
 
 	ruleID, errorKey, err := types.RuleIDWithErrorKeyFromCompositeRuleID(ctypes.RuleID(ruleIDWithErrorKey))
 	if err != nil {
-		handleServerError(writer, &RouterParsingError{
-			ParamName:  RuleIDParamName,
-			ParamValue: ruleIDWithErrorKey,
-			ErrString:  err.Error(),
-		})
+		// Sending response without logging error in handleServerError as the function already sends warning logs
+		respErr := responses.SendBadRequest(writer, fmt.Sprintf(
+			"Error during parsing param '%s' with value '%s'. Error: '%s'",
+			RuleIDParamName, ruleIDWithErrorKey, err.Error(),
+		))
+		if respErr != nil {
+			log.Error().Err(respErr).Msg("Error sending bad request response")
+		}
 		return ctypes.RuleID(""), ctypes.ErrorKey(""), err
 	}
 
@@ -72,7 +78,7 @@ func readCompositeRuleID(request *http.Request) (
 	ruleIDParam, err := httputils.GetRouterParam(request, RuleIDParamName)
 	if err != nil {
 		const message = "unable to get rule id"
-		log.Error().Err(err).Msg(message)
+		log.Warn().Err(err).Msg(message)
 		return
 	}
 
@@ -86,7 +92,7 @@ func readCompositeRuleID(request *http.Request) (
 			ParamValue: ruleIDParam,
 			ErrString:  msg.Error(),
 		}
-		log.Error().Err(err).Send()
+		log.Warn().Err(err).Msg("invalid composite rule ID")
 		return
 	}
 
@@ -116,7 +122,7 @@ func (server *HTTPServer) readParamsGetRecommendations(writer http.ResponseWrite
 
 	impactingParamBool, err := readImpactingParam(request)
 	if err != nil {
-		log.Err(err).Msgf("Error parsing `%s` URL parameter.", ImpactingParam)
+		log.Warn().Err(err).Msgf("Error parsing `%s` URL parameter.", ImpactingParam)
 		handleServerError(writer, &RouterParsingError{
 			ParamName: ImpactingParam,
 			ErrString: "Unparsable boolean value",
@@ -250,4 +256,46 @@ func readRequestIDList(writer http.ResponseWriter, request *http.Request) (
 	}
 
 	return validatedRequestList, nil
+}
+
+// readNamespace retrieves namespace UUID from request
+// if it's not possible, it writes http error to the writer and returns error
+func readNamespace(writer http.ResponseWriter, request *http.Request) (
+	namespace types.Namespace, err error,
+) {
+	namespaceID, err := httputils.GetRouterParam(request, NamespaceIDParam)
+	if err != nil {
+		handleServerError(writer, err)
+		return
+	}
+
+	validatedNamespaceID, err := validateNamespaceID(namespaceID)
+	if err != nil {
+		err = &RouterParsingError{
+			ParamName:  NamespaceIDParam,
+			ParamValue: namespaceID,
+			ErrString:  err.Error(),
+		}
+		handleServerError(writer, err)
+		return
+	}
+
+	namespace.UUID = validatedNamespaceID
+
+	return
+}
+
+// rule tests used by molodec use non-UUID namespace IDs, we must allow any garbage
+// until that's resolved
+func validateNamespaceID(namespace string) (string, error) {
+	IDValidator := regexp.MustCompile(`^.{1,256}$`)
+
+	if !IDValidator.MatchString(namespace) {
+		message := fmt.Sprintf("invalid namespace ID: '%s'", namespace)
+		err := errors.New(message)
+		log.Error().Err(err).Msg(message)
+		return "", err
+	}
+
+	return namespace, nil
 }

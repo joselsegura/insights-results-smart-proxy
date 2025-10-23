@@ -40,12 +40,13 @@ objects:
     name: ccx-smart-proxy
   spec:
     envName: ${ENV_NAME}
+    inMemoryDb: true
+    sharedInMemoryDbAppName: valkey-writer
     testing:
       iqePlugin: ccx
-    optionalDependencies:
-      - insights-content-service
+    dependencies:
+      - valkey-writer
       - ccx-insights-results
-      - ccx-insights-results-cache-writer
     deployments:
       - name: service
         minReplicas: ${{MIN_REPLICAS}}
@@ -81,6 +82,8 @@ objects:
               value: "${IRSP_ENABLE_INTERNAL_ORGANIZATIONS}"
             - name: INSIGHTS_RESULTS_SMART_PROXY__SERVER__ORG_CLUSTERS_FALLBACK
               value: "${ORG_CLUSTERS_FALLBACK}"
+            - name: INSIGHTS_RESULTS_SMART_PROXY__SERVER__USE_RBAC
+              value: "${USE_RBAC}"
             - name: INSIGHTS_RESULTS_SMART_PROXY__SERVICES__AGGREGATOR
               value: ${INSIGHTS_RESULTS_AGGREGATOR_SERVICE_URL}
             - name: INSIGHTS_RESULTS_SMART_PROXY__SERVICES__CONTENT
@@ -89,29 +92,24 @@ objects:
               value: ${INSIGHTS_CONTENT_SERVICE_POLL_TIME}
             - name: INSIGHTS_RESULTS_SMART_PROXY__SERVICES__UPGRADE_RISKS_PREDICTION
               value: ${INSIGHTS_DATA_ENGINEERING_URL}
-            - name: INSIGHTS_RESULTS_SMART_PROXY__REDIS__ENDPOINT
-              value: ${INSIGHTS_REDIS_URL}
             - name: INSIGHTS_RESULTS_SMART_PROXY__REDIS__DATABASE
               value: ${INSIGHTS_REDIS_DATABASE}
-            - name: INSIGHTS_RESULTS_SMART_PROXY__REDIS__PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: cache-writer-redis-credentials
-                  key: password
             - name: INSIGHTS_RESULTS_SMART_PROXY__REDIS__TIMEOUT_SECONDS
               value: ${INSIGHTS_REDIS_TIMEOUT_SECONDS}
+            - name: INSIGHTS_RESULTS_SMART_PROXY__RBAC__URL
+              value: "${RBAC_SERVER_URL}"
+            - name: INSIGHTS_RESULTS_SMART_PROXY__RBAC__ENFORCE
+              value: "${ENFORCE_RBAC}"
             - name: INSIGHTS_RESULTS_SMART_PROXY__SETUP__INTERNAL_RULES_ORGANIZATIONS_CSV_FILE
               value: "${IRSP_INTERNAL_RULES_ORGANIZATIONS_CSV_FILE}"
             - name: INSIGHTS_RESULTS_SMART_PROXY__LOGGING__LOGGING_TO_CLOUD_WATCH_ENABLED
               value: ${LOGGING_TO_CLOUD_WATCH_ENABLED}
             - name: INSIGHTS_RESULTS_SMART_PROXY__LOGGING__LOG_LEVEL
               value: ${LOG_LEVEL}
+            - name: INSIGHTS_RESULTS_SMART_PROXY__LOGGING__LOGGING_TO_SENTRY_ENABLED
+              value: ${SENTRY_ENABLED}
             - name: INSIGHTS_RESULTS_SMART_PROXY__CLOUDWATCH__DEBUG
               value: ${CLOUDWATCH_DEBUG}
-            - name: INSIGHTS_RESULTS_SMART_PROXY__CLOUDWATCH__STREAM_NAME
-              value: ${IRSP_LOG_STREAM}
-            - name: INSIGHTS_RESULTS_SMART_PROXY__CLOUDWATCH__CREATE_STREAM_IF_NOT_EXISTS
-              value: ${CREATE_STREAM_IF_NOT_EXISTS}
             - name: INSIGHTS_RESULTS_SMART_PROXY__CLOUDWATCH__AWS_REGION
               valueFrom:
                 secretKeyRef:
@@ -136,6 +134,16 @@ objects:
                   name: cloudwatch
                   key: aws_secret_access_key
                   optional: true
+            - name: INSIGHTS_RESULTS_SMART_PROXY__LOGGING__LOGGING_TO_SENTRY_ENABLED
+              value: ${SENTRY_ENABLED}
+            - name: INSIGHTS_RESULTS_SMART_PROXY__SENTRY__DSN
+              valueFrom:
+                secretKeyRef:
+                  key: dsn
+                  name: insights-results-smart-proxy-dsn
+                  optional: true
+            - name: INSIGHTS_RESULTS_SMART_PROXY__SENTRY__ENVIRONMENT
+              value: ${ENV_NAME}
             - name: INSIGHTS_RESULTS_SMART_PROXY__AMSCLIENT__URL
               value: ${AMS_API_URL}
             - name: INSIGHTS_RESULTS_SMART_PROXY__AMSCLIENT__CLIENT_ID
@@ -152,6 +160,8 @@ objects:
                   optional: true
             - name: INSIGHTS_RESULTS_SMART_PROXY__AMSCLIENT__PAGE_SIZE
               value: ${AMS_API_PAGESIZE}
+            - name: INSIGHTS_RESULTS_SMART_PROXY__AMSCLIENT__CLUSTER_LIST_CACHING
+              value: ${AMS_API_CLUSTER_LIST_CACHING}
             - name: INSIGHTS_RESULTS_SMART_PROXY__AMSCLIENT__TOKEN
               valueFrom:
                 secretKeyRef:
@@ -216,11 +226,12 @@ objects:
       app: ccx-smart-proxy
     sessionAffinity: None
     type: ClusterIP
-    
+
 parameters:
 - description: Image name
   name: IMAGE
-  value: quay.io/cloudservices/ccx-smart-proxy
+  required: true
+  value: quay.io/redhat-services-prod/obsint-processing-tenant/smart-proxy/smart-proxy
 - description: Image tag
   name: IMAGE_TAG
   required: true
@@ -259,8 +270,6 @@ parameters:
   value: "http://ccx-insights-content-service:10000/api/v1/"
 - name: INSIGHTS_DATA_ENGINEERING_URL
   value: "http://ccx-upgrades-data-eng-svc:8000/"
-- name: INSIGHTS_REDIS_URL
-  value: "ccx-redis:6379"
 - name: INSIGHTS_REDIS_DATABASE
   value: "0"
 - name: INSIGHTS_REDIS_TIMEOUT_SECONDS
@@ -281,16 +290,22 @@ parameters:
   required: true
 - name: LOG_LEVEL
   value: "INFO"
+- name: SENTRY_ENABLED
+  value: "false"
 - name: CLOUDWATCH_DEBUG
   value: "false"
   required: true
-- name: IRSP_LOG_STREAM
-  value: "insights-results-smart-proxy"
-- name: CREATE_STREAM_IF_NOT_EXISTS
-  value: "true"
 - name: AMS_API_URL
   value: "https://api.stage.openshift.com"
 - name: AMS_API_PAGESIZE
   value: "-1"
+- name: AMS_API_CLUSTER_LIST_CACHING
+  value: "false"
 - name: ORG_CLUSTERS_FALLBACK
+  value: "false"
+- name: USE_RBAC
+  value: "false"
+- name: RBAC_SERVER_URL
+  value: "http://rbac-service:8000/api/rbac/v1"
+- name: ENFORCE_RBAC
   value: "false"

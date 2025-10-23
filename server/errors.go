@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/RedHatInsights/insights-results-smart-proxy/auth"
 	"github.com/RedHatInsights/insights-results-smart-proxy/content"
 
 	"github.com/RedHatInsights/insights-operator-utils/responses"
@@ -57,15 +58,6 @@ func (e *RouterParsingError) Error() string {
 	)
 }
 
-// AuthenticationError happens during auth problems, for example malformed token
-type AuthenticationError struct {
-	ErrString string
-}
-
-func (e *AuthenticationError) Error() string {
-	return e.ErrString
-}
-
 // NoBodyError error meaning that client didn't provide body when it's required
 type NoBodyError struct{}
 
@@ -78,6 +70,16 @@ type BadBodyContent struct{}
 
 func (*BadBodyContent) Error() string {
 	return "client didn't provide a valid request body"
+}
+
+// TooManyClustersError error meaning that client is asking for too many clusters.
+// It is used in the URP endpoints, where using a big number of clusters may end up
+// in too slow and big requests.
+type TooManyClustersError struct {
+}
+
+func (*TooManyClustersError) Error() string {
+	return fmt.Sprintf("the maximum amount of clusters allowed are %d", MaxAllowedClusters)
 }
 
 // ContentServiceUnavailableError error is used when the content service cannot be reached
@@ -117,12 +119,13 @@ func (*ParamsParsingError) Error() string {
 
 // handleServerError handles separate server errors and sends appropriate responses
 func handleServerError(writer http.ResponseWriter, err error) {
-	log.Error().Err(err).Msg("handleServerError()")
+	handleServerErrorStr := "handleServerError()"
+	var level = log.Warn // set the default log level for most HTTP responses
 
 	var respErr error
 
 	switch err := err.(type) {
-	case *RouterMissingParamError, *RouterParsingError, *json.SyntaxError, *NoBodyError, *ParamsParsingError, *BadBodyContent:
+	case *RouterMissingParamError, *RouterParsingError, *json.SyntaxError, *NoBodyError, *ParamsParsingError, *BadBodyContent, *TooManyClustersError:
 		respErr = responses.SendBadRequest(writer, err.Error())
 	case *json.UnmarshalTypeError:
 		respErr = responses.SendBadRequest(writer, "bad type in json data")
@@ -130,15 +133,18 @@ func handleServerError(writer http.ResponseWriter, err error) {
 		respErr = responses.SendNotFound(writer, err.Error())
 	case *types.NoContentError:
 		respErr = responses.SendNoContent(writer)
-	case *AuthenticationError:
+	case *auth.AuthenticationError, *auth.AuthorizationError:
 		respErr = responses.SendForbidden(writer, err.Error())
 	case *ContentServiceUnavailableError, *AggregatorServiceUnavailableError,
 		*AMSAPIUnavailableError, *content.RuleContentDirectoryTimeoutError,
 		*UpgradesDataEngServiceUnavailableError:
 		respErr = responses.SendServiceUnavailable(writer, err.Error())
 	default:
+		level = log.Error
 		respErr = responses.SendInternalServerError(writer, "Internal Server Error")
 	}
+
+	level().Err(err).Msg(handleServerErrorStr)
 
 	if respErr != nil {
 		log.Error().Err(respErr).Msg(responseDataError)

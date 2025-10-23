@@ -28,6 +28,7 @@ enable_internal_rules_organizations = false
 internal_rules_organizations = []
 log_auth_token = true
 org_clusters_fallback = false
+use_rbac = false
 
 [services]
 aggregator = "http://localhost:8080/api/v1/"
@@ -44,21 +45,24 @@ url = "https://api.openshift.com"
 client_id = ""
 client_secret = ""
 page_size = 6000
+cluster_list_caching = false
 
 [metrics]
 namespace = "smart_proxy"
 
 [sentry]
-dns = ""
+dsn = ""
+environment = "dev"
 
-[kafka_zerolog]
-broker = ""
-topic = ""
-cert_path = ""
-level = ""
+[logging]
+logging_to_sentry_enabled = false
 
 [redis]
 database = 0
 endpoint = "localhost:6379"
 password = ""
 timeout_seconds = 30
+
+[rbac]
+url = "https://console.redhat.com/api/rbac/v1"
+enforce = false

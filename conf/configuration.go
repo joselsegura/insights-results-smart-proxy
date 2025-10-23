@@ -45,6 +45,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/RedHatInsights/insights-operator-utils/logger"
 	"github.com/RedHatInsights/insights-results-smart-proxy/amsclient"
+	"github.com/RedHatInsights/insights-results-smart-proxy/auth"
 	"github.com/RedHatInsights/insights-results-smart-proxy/server"
 	"github.com/RedHatInsights/insights-results-smart-proxy/services"
 	types "github.com/RedHatInsights/insights-results-types"
@@ -60,6 +61,8 @@ const (
 	// envPrefix is prefix for all environment variables that contains
 	// various configuration options
 	envPrefix = "INSIGHTS_RESULTS_SMART_PROXY_"
+
+	noInMemoryDB = "warning: no in-memory database section in Clowder config"
 )
 
 // SetupConfiguration should only be used at startup
@@ -82,8 +85,8 @@ var Config struct {
 	LoggingConf       logger.LoggingConfiguration       `mapstructure:"logging" toml:"logging"`
 	CloudWatchConf    logger.CloudWatchConfiguration    `mapstructure:"cloudwatch" toml:"cloudwatch"`
 	SentryLoggingConf logger.SentryLoggingConfiguration `mapstructure:"sentry" toml:"sentry"`
-	KafkaZerologConf  logger.KafkaZerologConfiguration  `mapstructure:"kafka_zerolog" toml:"kafka_zerolog"`
 	AMSClientConf     amsclient.Configuration           `mapstructure:"amsclient" toml:"amsclient"`
+	RBACConf          auth.RBACConfig                   `mapstructure:"rbac" toml:"rbac"`
 }
 
 // LoadConfiguration loads configuration from defaultConfigFile, file set in
@@ -137,11 +140,7 @@ func LoadConfiguration(defaultConfigFile string) error {
 		return fmt.Errorf("fatal error config file: %s", err)
 	}
 
-	if clowder.IsClowderEnabled() {
-		fmt.Println("Clowder is enabled")
-	} else {
-		fmt.Println("Clowder is disabled")
-	}
+	updateConfigFromClowder()
 
 	// everything's should be ok
 	return nil
@@ -195,11 +194,6 @@ func GetSentryLoggingConfiguration() logger.SentryLoggingConfiguration {
 	return Config.SentryLoggingConf
 }
 
-// GetKafkaZerologConfiguration returns the kafkazero log configuration
-func GetKafkaZerologConfiguration() logger.KafkaZerologConfiguration {
-	return Config.KafkaZerologConf
-}
-
 // GetAMSClientConfiguration returns the amsclient configuration
 func GetAMSClientConfiguration() amsclient.Configuration {
 	return Config.AMSClientConf
@@ -208,6 +202,37 @@ func GetAMSClientConfiguration() amsclient.Configuration {
 // GetRedisConfiguration returns Redis configuration
 func GetRedisConfiguration() services.RedisConfiguration {
 	return Config.RedisConf
+}
+
+// GetRBACConfiguration returns the RBAC configuration loaded in Config.
+func GetRBACConfiguration() auth.RBACConfig {
+	return Config.RBACConf
+}
+
+func updateConfigFromClowder() {
+	if !clowder.IsClowderEnabled() {
+		fmt.Println("Clowder is disabled")
+		return
+	}
+
+	fmt.Println("Clowder is enabled")
+
+	// get in-memory DB configuration from clowder
+	if clowder.LoadedConfig.InMemoryDb != nil {
+		updateRedisConfig()
+	} else {
+		fmt.Println(noInMemoryDB)
+	}
+}
+
+func updateRedisConfig() {
+	Config.RedisConf.RedisEndpoint = fmt.Sprintf("%s:%d", clowder.LoadedConfig.InMemoryDb.Hostname, clowder.LoadedConfig.InMemoryDb.Port)
+	if clowder.LoadedConfig.InMemoryDb.Username != nil {
+		Config.RedisConf.RedisUsername = *clowder.LoadedConfig.InMemoryDb.Username
+	}
+	if clowder.LoadedConfig.InMemoryDb.Password != nil {
+		Config.RedisConf.RedisPassword = *clowder.LoadedConfig.InMemoryDb.Password
+	}
 }
 
 // checkIfFileExists returns nil if path doesn't exist or isn't a file,
@@ -250,7 +275,7 @@ func getInternalRulesOrganizations() []types.OrgID {
 		log.Fatal().Err(err).Msg("Internal organizations CSV could not be processed")
 	}
 
-	log.Info().Msgf("Internal rules request filtering enabled. Organizations allowed: %v", internalOrganizations)
+	log.Debug().Msgf("Internal rules request filtering enabled. Organizations allowed: %v", internalOrganizations)
 	return internalOrganizations
 }
 
@@ -271,7 +296,7 @@ func loadOrgIDsFromCSV(r io.Reader) ([]types.OrgID, error) {
 			continue // skip header
 		}
 
-		orgID, err := strconv.ParseUint(line[0], 10, 64)
+		orgID, err := strconv.ParseUint(line[0], 10, 32)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"organization ID on line %v in CSV is not numerical. Found value: %v",
@@ -279,7 +304,7 @@ func loadOrgIDsFromCSV(r io.Reader) ([]types.OrgID, error) {
 			)
 		}
 
-		orgIDs = append(orgIDs, types.OrgID(orgID))
+		orgIDs = append(orgIDs, types.OrgID(uint32(orgID)))
 	}
 
 	return orgIDs, nil

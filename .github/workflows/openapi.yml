@@ -1,5 +1,4 @@
-#!/bin/bash
-# Copyright 2020 Red Hat, Inc
+# Copyright 2023 Red Hat, Inc
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,18 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+name: OpenAPI checks
 
-if ! [ -x "$(command -v goconst)" ]
-then
-    echo -e "${BLUE}Installing goconst${NC}"
-    GO111MODULE=off go get github.com/jgautheron/goconst/cmd/goconst
-fi
+on:
+  push:
+    branches: ["master", "main"]
+  pull_request:
 
-if [[ $(goconst -min-occurrences=3 ./... | tee /dev/tty | wc -l) -ne 0 ]]
-then
-    echo "Duplicated string(s) found"
-    exit 1
-else
-    echo "No duplicated strings found"
-    exit 0
-fi
+jobs:
+  openapi-checks:
+    runs-on: ubuntu-latest
+    name: OpenAPI checks
+    steps:
+      - uses: actions/checkout@v4
+      - name: check openapi specs
+        run: make openapi-check

@@ -36,7 +36,7 @@ const (
 	improperRuleSelectorFormat = "improper rule selector format"
 	readRuleStatusError        = "read rule status error"
 	readRuleJustificationError = "can not retrieve rule disable justification from Aggregator"
-	aggregatorResponseError    = "Problem retrieving response from aggregator endpoint"
+	aggregatorResponseError    = "problem retrieving response from aggregator endpoint"
 )
 
 // method readAckList list acks from this account where the rule is active.
@@ -117,7 +117,7 @@ func (server *HTTPServer) getAcknowledge(writer http.ResponseWriter, request *ht
 
 	ruleID, errorKey, err := readRuleIDWithErrorKey(writer, request)
 	if err != nil {
-		log.Error().Err(err).Msg(improperRuleSelectorFormat)
+		log.Warn().Err(err).Msg(improperRuleSelectorFormat)
 		// server error has been handled already
 		return
 	}
@@ -137,7 +137,7 @@ func (server *HTTPServer) getAcknowledge(writer http.ResponseWriter, request *ht
 	// rule was not acked -> nothing to return
 	if !found {
 		writer.WriteHeader(http.StatusNotFound)
-		log.Info().Msg("Rule has not been disabled previously -> nothing to return!")
+		log.Debug().Msg("Rule has not been disabled previously -> nothing to return!")
 		return
 	}
 
@@ -195,7 +195,7 @@ func (server *HTTPServer) acknowledgePost(writer http.ResponseWriter, request *h
 	// check if rule selector has the proper format
 	ruleID, errorKey, err := parsers.ParseRuleSelector(parameters.RuleSelector)
 	if err != nil {
-		log.Error().Err(err).Msg(improperRuleSelectorFormat)
+		log.Warn().Err(err).Msg(improperRuleSelectorFormat)
 		// return HTTP code 400 to client
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
@@ -203,8 +203,8 @@ func (server *HTTPServer) acknowledgePost(writer http.ResponseWriter, request *h
 
 	// display parsed rule ID and error key
 	log.Debug().
-		Str("ruleID", string(ruleID)).
-		Str("errorKey", string(errorKey)).
+		Str(ruleIDStr, string(ruleID)).
+		Str(errorKeyStr, string(errorKey)).
 		Msg("Parsed rule selector")
 
 	// test if the rule has been acknowledged already
@@ -284,7 +284,7 @@ func (server *HTTPServer) updateAcknowledge(writer http.ResponseWriter, request 
 
 	ruleID, errorKey, err := readRuleIDWithErrorKey(writer, request)
 	if err != nil {
-		log.Error().Err(err).Msg(improperRuleSelectorFormat)
+		log.Warn().Err(err).Msg(improperRuleSelectorFormat)
 		// server error has been handled already
 		return
 	}
@@ -312,7 +312,7 @@ func (server *HTTPServer) updateAcknowledge(writer http.ResponseWriter, request 
 
 	// if acknowledgement has NOT been found -> return 404 NotFound
 	if !found {
-		log.Info().Msg("Rule ack can not be found")
+		log.Debug().Msg("Rule ack can not be found")
 		err := &utypes.ItemNotFoundError{ItemID: (ruleID + "|" + types.RuleID(errorKey))}
 		handleServerError(writer, err)
 		return
@@ -355,7 +355,7 @@ func (server *HTTPServer) deleteAcknowledge(writer http.ResponseWriter, request 
 
 	ruleID, errorKey, err := readRuleIDWithErrorKey(writer, request)
 	if err != nil {
-		log.Error().Err(err).Msg(improperRuleSelectorFormat)
+		log.Warn().Err(err).Msg(improperRuleSelectorFormat)
 		// server error has been handled already
 		return
 	}
@@ -374,7 +374,7 @@ func (server *HTTPServer) deleteAcknowledge(writer http.ResponseWriter, request 
 
 	if !found {
 		writer.WriteHeader(http.StatusNotFound)
-		log.Info().Msg("Rule has not been disabled previously -> ACK won't be deleted")
+		log.Debug().Msg("Rule has not been disabled previously -> ACK won't be deleted")
 		return
 	}
 
@@ -401,7 +401,8 @@ func generateRuleAckMap(acks []types.SystemWideRuleDisable) (ruleAcksMap map[typ
 		if err == nil {
 			ruleAcksMap[compositeRuleID] = true
 		} else {
-			log.Error().Err(err).Msgf(compositeRuleIDError, ack.RuleID, ack.ErrorKey)
+			log.Error().Err(err).Interface(ruleIDStr, ack.RuleID).
+				Interface(errorKeyStr, ack.ErrorKey).Msg(compositeRuleIDError)
 		}
 	}
 	return

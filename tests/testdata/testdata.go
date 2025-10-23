@@ -36,6 +36,8 @@ const (
 	OrgID = testdata.OrgID
 
 	GeneratedAt = "2020-03-06T12:00:00Z"
+
+	NamespaceUUID1 = "00000000-aaaa-bbbb-cccc-eeeeeeeeeeee"
 )
 
 var (
@@ -90,6 +92,8 @@ var (
 		},
 	}
 
+	ClusterList1Cluster = []types.ClusterName{testdata.ClusterName}
+
 	ClusterInfoResult2Clusters = []types.ClusterInfo{
 		{
 			ID:          testdata.GetRandomClusterID(),
@@ -100,6 +104,8 @@ var (
 			DisplayName: ClusterDisplayName2,
 		},
 	}
+
+	ClusterList2Clusters = []types.ClusterName{ClusterInfoResult2Clusters[0].ID, ClusterInfoResult2Clusters[1].ID}
 )
 
 // GetRandomClusterInfo function returns a ClusterInfo with random ID

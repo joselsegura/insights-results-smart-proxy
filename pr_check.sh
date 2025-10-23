@@ -21,16 +21,19 @@ set -exv
 # --------------------------------------------
 APP_NAME="ccx-data-pipeline"  # name of app-sre "application" folder this component lives in
 REF_ENV="insights-production"
-COMPONENT_NAME="insights-results-smart-proxy"  # name of app-sre "resourceTemplate" in deploy.yaml for this component
+COMPONENT_NAME="ccx-smart-proxy"  # name of app-sre "resourceTemplate" in deploy.yaml for this component
 IMAGE="quay.io/cloudservices/ccx-smart-proxy"
-COMPONENTS="ccx-data-pipeline ccx-insights-results insights-content-service insights-results-smart-proxy ccx-insights-results-cache-writer ocp-advisor-frontend ccx-mock-ams " # space-separated list of components to laod
-COMPONENTS_W_RESOURCES="insights-results-smart-proxy"  # component to keep
+COMPONENTS="ccx-data-pipeline ccx-insights-results dvo-extractor dvo-writer insights-content-service ccx-smart-proxy ocp-advisor-frontend ccx-mock-ams valkey-writer ccx-upgrades-rhobs-mock" # space-separated list of components to laod
+COMPONENTS_W_RESOURCES="ccx-smart-proxy"  # component to keep
 CACHE_FROM_LATEST_IMAGE="true"
 DEPLOY_FRONTENDS="true"   # enable for front-end/UI tests
+# Set the correct images for pull requests.
+# pr_check in pull requests still uses the old cloudservices images
+EXTRA_DEPLOY_ARGS="--set-parameter ccx-smart-proxy/IMAGE=quay.io/cloudservices/ccx-smart-proxy"
 
 export IQE_PLUGINS="ccx"
 # Run all pipeline and ui tests
-export IQE_MARKER_EXPRESSION="pipeline or (core and ui)"
+export IQE_MARKER_EXPRESSION="pipeline or (smoke and ui)"
 export IQE_FILTER_EXPRESSION=""
 export IQE_REQUIREMENTS_PRIORITY=""
 export IQE_TEST_IMPORTANCE=""

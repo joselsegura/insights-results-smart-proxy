@@ -1,5 +1,4 @@
-#!/bin/bash
-# Copyright 2021 Red Hat, Inc
+# Copyright 2023 Red Hat, Inc
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,14 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-DOCFILES=$(find docs/packages -name '*.html' | sort)
-cp docs/sources.tmpl.md docs/sources.md
+name: Go linters
 
-for filepath in $DOCFILES; do
-    text=${filepath#*/packages/}
-    text=${text/.html/.go}
-    link=.${filepath#docs}
-    echo "* [$text]($link)" >> docs/sources.md
-done
+on:
+  push:
+    branches: ["master", "main"]
+  pull_request:
 
-exit 0
+jobs:
+  golint:
+    runs-on: ubuntu-latest
+    name: Linters
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.23"
+      - name: Build project
+        run: make
+      - name: shellcheck
+        run: make shellcheck
+      - name: ABC metrics checker
+        run: make abcgo

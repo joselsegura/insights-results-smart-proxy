@@ -114,6 +114,63 @@
         }
       }
     },
+    "/groups": {
+      "get": {
+        "tags": [
+          "prod"
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            },
+            "description": "A JSON array of groups."
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          },
+          "503": {
+            "content": {
+              "text/plain": {}
+            },
+            "description": "Content service is unavailable"
+          }
+        },
+        "operationId": "getRuleGroups",
+        "summary": "Get all rule groups and their relevant information",
+        "description": "This simply redirects to an endpoint of the same name of a service called insights-content-service"
+      }
+    },
     "/cluster/{clusterId}/reports": {
       "get": {
         "tags": [
@@ -156,6 +213,9 @@
           },
           "400": {
             "description": "Invalid request, usually caused when some cluster belongs to different organization."
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           },
           "404": {
             "description": "Cluster report is not available, probably not connected cluster."
@@ -225,6 +285,9 @@
           "400": {
             "description": "Invalid request, usually caused when some cluster belongs to different organization."
           },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          },
           "404": {
             "description": "Cluster info was not returned from AMS API for given organization."
           }
@@ -265,57 +328,7 @@
                           "type": "boolean"
                         },
                         "upgrade_risks_predictors": {
-                          "type": "object",
-                          "properties": {
-                            "alerts": {
-                              "type": "array",
-                              "items": {
-                                "type": "object",
-                                "properties": {
-                                  "name": {
-                                    "type": "string",
-                                    "example": "APIRemovedInNextEUSReleaseInUse"
-                                  },
-                                  "namespace": {
-                                    "type": "string",
-                                    "example": "openshift-kube-apiserver"
-                                  },
-                                  "severity": {
-                                    "type": "string",
-                                    "example": "info"
-                                  },
-                                  "url": {
-                                    "type": "string",
-                                    "example": "https://my-cluster.com/monitoring/alerts?orderBy=asc&sortBy=Severity&alert-name=APIRemovedInNextEUSReleaseInUse"
-                                  }
-                                }
-                              }
-                            },
-                            "operator_conditions": {
-                              "type": "array",
-                              "items": {
-                                "type": "object",
-                                "properties": {
-                                  "name": {
-                                    "type": "string",
-                                    "example": "authentication"
-                                  },
-                                  "condition": {
-                                    "type": "string",
-                                    "example": "Failing"
-                                  },
-                                  "reason": {
-                                    "type": "string",
-                                    "example": "AsExpected"
-                                  },
-                                  "url": {
-                                    "type": "string",
-                                    "example": "https://my-cluster.com/k8s/cluster/config.openshift.io~v1~ClusterOperator/authentication"
-                                  }
-                                }
-                              }
-                            }
-                          }
+                          "$ref": "#/components/schemas/upgradeRisksPredictors"
                         }
                       }
                     },
@@ -339,6 +352,9 @@
           },
           "204": {
             "description": "Status NoContent: happens when the cluster is managed. The upgrade risks prediction is not available for this kind of clusters."
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           },
           "404": {
             "description": "Status NotFound: happens when the cluster cannot be found in the Observatorium data"
@@ -394,6 +410,9 @@
           },
           "400": {
             "description": "Invalid request (e.g cluster ID with unexpected format)"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           },
           "404": {
             "description": "Cluster not found"
@@ -458,6 +477,9 @@
           "400": {
             "description": "Invalid request (e.g cluster ID with unexpected format) or payload (empty body or not a list of strings)"
           },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          },
           "404": {
             "description": "Cluster ID not found or no requests found in storage for provided IDs"
           }
@@ -517,6 +539,9 @@
           },
           "400": {
             "description": "Invalid request or invalid cluster ID"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           },
           "404": {
             "description": "Request ID or cluster ID not found"
@@ -580,6 +605,9 @@
           },
           "400": {
             "description": "Invalid request or invalid cluster ID"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           },
           "404": {
             "description": "Cluster or request ID not found"
@@ -739,11 +767,255 @@
               }
             },
             "description": "A JSON object with the content."
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           }
         },
         "operationId": "getContent",
         "summary": "Get all static content",
         "description": "The static content is taken from the cache periodically updated from the content service"
+      }
+    },
+    "/namespaces/dvo/{namespaceId}/cluster/{clusterId}": {
+      "get": {
+        "summary": "Retrieve DVO recommendations for a single namespace + cluster combination.",
+        "operationId": "getDVONamespaceCluster",
+        "description": "For the given cluster and namespace IDs, return a list of DVO recommendations, complete with the descriptions and steps to resolve.",
+        "tags": [
+          "prod"
+        ],
+        "parameters": [
+          {
+            "name": "clusterId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/clusterId"
+            }
+          },
+          {
+            "name": "namespaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/requestId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "DVO recommendations for namespace + cluster",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "$ref": "#/components/schemas/statusResponse"
+                    },
+                    "cluster": {
+                      "type": "object",
+                      "properties": {
+                        "uuid": {
+                          "$ref": "#/components/schemas/clusterId"
+                        },
+                        "display_name": {
+                          "type": "string",
+                          "description": "A human-readable name for the cluster",
+                          "example": "Production cluster 1"
+                        }
+                      }
+                    },
+                    "namespace": {
+                      "type": "object",
+                      "properties": {
+                        "uuid": {
+                          "$ref": "#/components/schemas/namespaceId"
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "A human-readable name for the namespace",
+                          "example": "Production namespace 1"
+                        }
+                      }
+                    },
+                    "metadata": {
+                      "$ref": "#/components/schemas/dvoReportMeta"
+                    },
+                    "recommendations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "check": {
+                            "type": "string",
+                            "description": "The rule ID in the | format.",
+                            "example": "rule.module|ERROR_KEY"
+                          },
+                          "details": {
+                            "type": "string",
+                            "description": "The title of the rule, a short description."
+                          },
+                          "resolution": {
+                            "type": "string",
+                            "description": "Resolution steps of the issue, possibly linking to a resolution article in the knowledge base."
+                          },
+                          "modified": {
+                            "description": "The date the recommendation was last updated.",
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "description": "Reason for the issue, giving the user more accurate description of the cause."
+                          },
+                          "more_info": {
+                            "type": "string",
+                            "description": "Additional information regarding the recommendation."
+                          },
+                          "total_risk": {
+                            "description": "Total risk - calculated from rule impact and likelihood.",
+                            "enum": [
+                              0,
+                              1,
+                              2,
+                              3,
+                              4
+                            ],
+                            "type": "integer"
+                          },
+                          "extra_data": {
+                            "description": "Used as templating/interpolation data for other content (details, resolution, etc.), has varying structure depending on the rules in the report, but should always be a valid JSON object.",
+                            "type": "object"
+                          },
+                          "objects": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "description": "The kind/category of the object."
+                                },
+                                "uid": {
+                                  "type": "string",
+                                  "description": "ID of the object."
+                                },
+                                "display_name": {
+                                  "type": "string",
+                                  "description": "A human-readable name for the cluster",
+                                  "example": "Production cluster 1"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "cluster",
+                    "namespace",
+                    "metadata",
+                    "recommendations"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or invalid cluster ID"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          },
+          "404": {
+            "description": "Data for cluster and namespace were not found in the storage."
+          }
+        }
+      }
+    },
+    "/namespaces/dvo": {
+      "get": {
+        "summary": "Retrieve DVO namespaces and recommendation aggregations for the whole organization",
+        "operationId": "getDVONamespaces",
+        "description": "For the user's organization, return a list of namespaces and aggregate information about each namespace",
+        "tags": [
+          "prod"
+        ],
+        "responses": {
+          "200": {
+            "description": "Namespaces for DVO workloads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "$ref": "#/components/schemas/statusResponse"
+                    },
+                    "workloads": {
+                      "type": "array",
+                      "description": "A list of namespaces, aggregate data about their workloads and DVO recommendations. Returns an empty list when a cluster is known, but no recommendations were found.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "$ref": "#/components/schemas/statusResponse"
+                          },
+                          "cluster": {
+                            "type": "object",
+                            "properties": {
+                              "uuid": {
+                                "$ref": "#/components/schemas/clusterId"
+                              },
+                              "display_name": {
+                                "type": "string",
+                                "description": "A human-readable name for the cluster",
+                                "example": "Production cluster 1"
+                              }
+                            }
+                          },
+                          "namespace": {
+                            "type": "object",
+                            "properties": {
+                              "uuid": {
+                                "$ref": "#/components/schemas/namespaceId"
+                              },
+                              "name": {
+                                "type": "string",
+                                "description": "A human-readable name for the namespace",
+                                "example": "Production namespace 1"
+                              }
+                            }
+                          },
+                          "metadata": {
+                            "$ref": "#/components/schemas/dvoReportMeta"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "workloads"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or invalid cluster ID"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          },
+          "404": {
+            "description": "Cluster was not found in the AMS API."
+          }
+        }
       }
     },
     "/ack": {
@@ -764,6 +1036,9 @@
               }
             },
             "description": "List of acked rules"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           }
         }
       },
@@ -816,6 +1091,9 @@
               }
             },
             "description": "Rule has been acked (disabled)"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           }
         }
       }
@@ -850,6 +1128,9 @@
               }
             },
             "description": "Rule ack has been found, the metadata is returned in response body"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           },
           "404": {
             "description": "Rule has not been acked (disabled) previously"
@@ -902,6 +1183,9 @@
             },
             "description": "Rule ack has been found and updated, the metadata is returned in response body"
           },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          },
           "404": {
             "description": "Rule has not been acked (disabled) previously"
           }
@@ -930,6 +1214,9 @@
           "204": {
             "description": "Rule ack has been deleted"
           },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          },
           "404": {
             "description": "Rule has not been acked (disabled) previously"
           }
@@ -954,6 +1241,9 @@
               }
             },
             "description": "If a cluster has 0 total_hit_count and empty last_checked_at timestamp, we have no Insights data for that archive. If total_hit_count = 0 and the timestamp is valid, there are no rule hits for the cluster."
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           },
           "503": {
             "content": {
@@ -1094,6 +1384,9 @@
               }
             }
           },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          },
           "404": {
             "description": "Rule ID is not available",
             "content": {
@@ -1211,12 +1504,8 @@
                         },
                         "rating": {
                           "description": "User vote - value of user voting. -1 is dislike vote, 0 is no vote, 1 is like vote.",
-                          "enum": [
-                            "-1",
-                            "0",
-                            "1"
-                          ],
-                          "type": "integer"
+                          "type": "integer",
+                          "enum": [-1, 0, 1]
                         },
                         "hosts_acked_count": {
                           "type": "integer"
@@ -1274,6 +1563,9 @@
               }
             },
             "description": "A JSON object with the content."
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           },
           "404": {
             "content": {
@@ -1423,6 +1715,9 @@
           "400": {
             "description": "Request body could not be parsed, so the query is not processed"
           },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          },
           "404": {
             "description": "Resource not found, usually caused when some rule selector, organization or user doesn't exist"
           },
@@ -1465,6 +1760,9 @@
               }
             },
             "description": "Returns a list recommendations and the number of clusters they're currently impacting. Default behaviour is to return only the rules that affect atleast one cluster. This can be changed by passing impacting parameter"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           }
         }
       }
@@ -1508,12 +1806,74 @@
           },
           "400": {
             "description": "Invalid request, usually caused when some rule identifier doesn't exist"
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
           }
         },
         "deprecated": false,
         "operationId": "sendRating",
         "summary": "Send the new rating for a given rule",
         "description": "Return the new rating. Any previous rating for this rule by this user is amended to the current value. This does not attempt to delete a rating by this user of thus rule if the rating is zero."
+      }
+    },
+    "/upgrade-risks-prediction": {
+      "post": {
+        "tags": [
+          "prod"
+        ],
+        "summary": "Returns the prediction based on latest stats for the given list of clusters.",
+        "description": "Predictions that are going to be returned are specified by list of cluster IDs that is part of request body.",
+        "operationId": "getUpgradeRisksPredictionForClustersPost",
+        "requestBody": {
+          "description": "List of cluster IDs. Each ID must conform to UUID format.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "clusters": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/clusterId"
+                    }
+                  }
+                }
+              },
+              "example": "{\"clusters\": [\"34c3ecc5-624a-49a5-bab8-4fdc5e51a266\"]}"
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Latest available update prediction for the given list of cluster IDs. Returns status of the prediction and their predictor facts that were taken into account for each cluster.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "$ref": "#/components/schemas/statusResponse"
+                    },
+                    "predictions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/upgradeRisksPrediction"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, usually caused when some cluster belongs to different organization."
+          },
+          "403": {
+            "$ref": "#/components/responses/unauthorized"
+          }
+        }
       }
     }
   },
@@ -1662,6 +2022,46 @@
           "managed": false,
           "count": 9,
           "last_checked_at": "2020-12-08T09:45:23Z"
+        }
+      },
+      "dvoReportMeta": {
+        "type": "object",
+        "properties": {
+          "recommendations": {
+            "type": "integer",
+            "description": "Total number of DVO recommendations affecting this namespace"
+          },
+          "objects": {
+            "type": "integer",
+            "description": "Total number of unique objects (workloads) being affected by DVO recommendations in this namespace. When a workload is being affected by several recommendations at once, it still counts as one affected object/workload in the context of a namespace."
+          },
+          "reported_at": {
+            "format": "date-time",
+            "type": "string",
+            "description": "Timestamp of the first analysis"
+          },
+          "last_checked_at": {
+            "format": "date-time",
+            "type": "string",
+            "description": "Timestamp of the last analysis"
+          },
+          "highest_severity": {
+            "type": "integer",
+            "description": "Highest recommendation severity affecting this namespace + cluster"
+          },
+          "hits_by_severity": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "A dictionary with the number of DVO recommendation hits grouped by their severity. Always provides the severity keys even if there are no recommendations currently hitting.",
+            "example": {
+              "1": 2,
+              "2": 3,
+              "3": 0,
+              "4": 1
+            }
+          }
         }
       },
       "reportResponse": {
@@ -2015,7 +2415,9 @@
             "type": "string"
           },
           "rating": {
-            "type": "integer"
+            "type": "integer",
+            "enum": [-1, 0, 1],
+            "description": "User rating - value of user rating. -1 is dislike, 0 is no vote, 1 is like."
           }
         }
       },
@@ -2024,11 +2426,18 @@
         "type": "string",
         "example": "ok"
       },
-      "requestId" : {
+      "requestId": {
         "description": "request ID",
         "type": "string",
         "format": "x-rh-insights-request-id",
         "example": "6d2eede257644308a8949c4ec251c5c4"
+      },
+      "namespaceId": {
+        "description": "ID of the namespace in a valid UUID format",
+        "type": "string",
+        "minLength": 36,
+        "maxLength": 36,
+        "format": "uuid"
       },
       "gatheringRequests": {
         "description": "List of stored requests for given orgId + clusterId",
@@ -2057,6 +2466,129 @@
             "received",
             "processed"
           ]
+        }
+      },
+      "upgradeRisksPrediction": {
+        "description": "",
+        "type": "object",
+        "required": [
+          "cluster_id",
+          "prediction_status"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "example": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+          },
+          "prediction_status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "upgrade_recommended": {
+            "type": "boolean",
+            "example": true
+          },
+          "upgrade_risks_predictors": {
+            "$ref": "#/components/schemas/upgradeRisksPredictors"
+          },
+          "last_checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2011-15-04T00:05:23Z"
+          }
+        }
+      },
+      "upgradeRisksPredictors": {
+        "type": "object",
+        "required": [
+          "alerts",
+          "operator_conditions"
+        ],
+        "properties": {
+          "alerts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/alert"
+            }
+          },
+          "operator_conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/operator_condition"
+            }
+          }
+        }
+      },
+      "alert": {
+        "type": "object",
+        "required": [
+          "name",
+          "namespace",
+          "severity",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "SomeCriticalAlert"
+          },
+          "namespace": {
+            "type": "string",
+            "example": "openshift-kube-apiserver"
+          },
+          "severity": {
+            "type": "string",
+            "example": "critical"
+          },
+          "url": {
+            "type": "string",
+            "example": "https://some_url.com/monitoring/alerts?orderBy=asc&sortBy=Severity&alert-name=SomeCriticalAlert"
+          }
+        }
+      },
+      "operator_condition": {
+        "type": "object",
+        "required": [
+          "name",
+          "condition",
+          "reason",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "authentication"
+          },
+          "condition": {
+            "type": "string",
+            "example": "Degraded"
+          },
+          "reason": {
+            "type": "string",
+            "example": "AsExpected"
+          },
+          "url": {
+            "type": "string",
+            "example": "https://some_url.com/k8s/cluster/config.openshift.io~v1~ClusterOperator/authentication"
+          }
+        }
+      }
+    },
+    "responses": {
+      "unauthorized": {
+        "description": "The requester is unauthorized. If using a service account, you may not belong to the right group with the right role. Please make sure you configured your user access on the console.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "example": "Account does not have the required permissions"
+                }
+              }
+            }
+          }
         }
       }
     },
